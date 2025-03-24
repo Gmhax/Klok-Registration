@@ -19,7 +19,7 @@ Ensure you have the following installed:
 
 ### Clone the repository
 ```sh
-git clone https://github.com/rpchubs/Klok-Registration.git
+git clone https://github.com/Gmhax/Klok-Registration
 cd Klok-Registration
 ```
 
