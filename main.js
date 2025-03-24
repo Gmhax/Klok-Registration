@@ -4,7 +4,6 @@ import { Wallet } from "ethers";
 import crypto from "crypto";
 import chalk from "chalk";
 import pLimit from "p-limit";
-import { HttpsProxyAgent } from 'https-proxy-agent';
 import config from "./config.js";
 import displayBanner from "./banner.js";
 
@@ -58,7 +57,7 @@ Issued At: ${timestamp}`;
   };
 }
 
-async function authenticate(wallet, proxyConfig, idx) {
+async function authenticate(wallet, idx) {
   try {
     const signResult = await signMessage(wallet);
     const payload = {
@@ -67,25 +66,10 @@ async function authenticate(wallet, proxyConfig, idx) {
       referral_code: config.REFERRAL_CODE.referral_code,
     };
 
-    // logInfo(
-    //   `Regis for ${maskAddress(wallet.address)} using ${
-    //     proxyConfig ? `proxy ${proxyConfig.host}:${proxyConfig.port}` : "default connection"
-    //   }...`,
-    //   idx
-    // );
-
     const options = {
       headers: config.DEFAULT_HEADERS,
       timeout: 60000,
     };
-
-    if (proxyConfig) {
-      const proxyUrl = `http://${proxyConfig.auth.username}:${proxyConfig.auth.password}@${proxyConfig.host}:${proxyConfig.port}`;
-      const agent = new HttpsProxyAgent(proxyUrl);
-      options.httpAgent = agent;
-      options.httpsAgent = agent;
-      options.proxy = false; 
-    }
 
     const response = await axios.post(`${config.BASE_URL}/verify`, payload, options);
     const { session_token } = response.data;
@@ -100,43 +84,6 @@ async function authenticate(wallet, proxyConfig, idx) {
       );
     }
     return null;
-  }
-}
-
-function parseProxy(proxyString) {
-  try {
-    const urlObj = new URL(proxyString);
-    return {
-      protocol: urlObj.protocol.slice(0, -1),
-      host: urlObj.hostname,
-      port: parseInt(urlObj.port),
-      auth: {
-        username: urlObj.username,
-        password: urlObj.password,
-      },
-    };
-  } catch (error) {
-    logError(`Invalid proxy format: ${proxyString}`);
-    return null;
-  }
-}
-
-async function getCurrentIP(proxyConfig) {
-  try {
-    const options = { timeout: 10000 };
-    if (proxyConfig) {
-      const agent = new HttpsProxyAgent(`http://${proxyConfig.auth.username}:${proxyConfig.auth.password}@${proxyConfig.host}:${proxyConfig.port}`);
-      options.httpAgent = agent;
-      options.httpsAgent = agent;
-      options.proxy = false;
-    }
-    const response = await axios.get("https://api.ipify.org?format=json", options);
-    return response.data.ip;
-  } catch (error) {
-    logError(
-      `Failed to get current IP${proxyConfig ? ` using proxy ${proxyConfig.host}:${proxyConfig.port}` : ""} - ${error.message}`
-    );
-    return "Unknown";
   }
 }
 
@@ -160,36 +107,12 @@ async function main() {
     process.exit(1);
   }
 
-  const proxiesFile = "proxies.txt";
-  let proxiesList = [];
-  if (fs.existsSync(proxiesFile)) {
-    try {
-      proxiesList = fs
-        .readFileSync(proxiesFile, "utf-8")
-        .split("\n")
-        .map((line) => line.trim())
-        .filter((line) => line !== "");
-    } catch (error) {
-      logError(`Failed to read ${proxiesFile}: ${error.message}`);
-    }
-  } else {
-    logInfo("No proxies.txt file found, using default connection.");
-  }
-  const useProxy = proxiesList.length > 0;
-  
   const successFile = "success.txt";
   fs.writeFileSync(successFile, ""); 
   const failFile = "fail.txt";
   fs.writeFileSync(failFile, "");
 
   const MAX_RETRIES = 5;
-  let proxyIndex = 0;
-  function getNextProxy() {
-    const proxyString = proxiesList[proxyIndex % proxiesList.length];
-    proxyIndex++;
-    return parseProxy(proxyString);
-  }
-
   const limit = pLimit(config.THREADS || 5);
 
   async function processWallet(privateKey, idx) {
@@ -200,38 +123,20 @@ async function main() {
       logError(`Invalid private key: ${privateKey}`, idx);
       return;
     }
-  
-    let currentIP;
-    let selectedProxyConfig = undefined; 
-  
-    if (useProxy) {
-      selectedProxyConfig = getNextProxy();
-      if (!selectedProxyConfig) {
-        logError("Invalid initial proxy encountered, using default connection.", idx);
-      }
-    }
-  
-    currentIP = await getCurrentIP(selectedProxyConfig);
-    logInfo(`Current IP for wallet ${maskAddress(wallet.address)}: ${currentIP}`, idx);
-  
+    
+    logInfo(`Processing wallet ${maskAddress(wallet.address)}`, idx);
+    
     let sessionToken = null;
     let attempts = 0;
-  
+    
     while (attempts < MAX_RETRIES && !sessionToken) {
-      // logInfo(
-      //   `Attempt ${attempts + 1} for wallet ${maskAddress(wallet.address)} using proxy ${currentIP}`,
-      //   idx
-      // );
-
-      sessionToken = await authenticate(wallet, selectedProxyConfig, idx);
-  
+      sessionToken = await authenticate(wallet, idx);
       if (!sessionToken) {
         logError(`Retrying wallet ${maskAddress(wallet.address)}...`, idx);
       }
-  
       attempts++;
     }
-  
+    
     if (sessionToken) {
       const line = `${wallet.address}:${privateKey}:${sessionToken}\n`;
       fs.appendFileSync(successFile, line);
